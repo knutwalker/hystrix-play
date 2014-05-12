@@ -1,13 +1,15 @@
 hystrix-play
 ============
 
-Playground for using Hystrix together with the playframework
+Playground for using [Hystrix](https://github.com/Netflix/Hystrix#readme) together with the playframework
 
 
 ## Using Hystrix Commands with Plays asynchronous actions
 
 There is an implicit method `future` available on any `HystrixCommand`, that will return a [Scala Future](http://www.scala-lang.org/api/current/#scala.concurrent.Future) rather then what Java calls a Future.
 This is implemented by [`HystrixCommandWithScalaFuture`](app/util/Futures.scala#L13)
+
+You can see it in Action in the [app/controllers/Application.scala#L16](Application controller).
 
 
 ## Providing a metrics stream, consumable by the hystrix-dashboard
