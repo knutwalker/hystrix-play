@@ -9,7 +9,7 @@ Playground for using [Hystrix](https://github.com/Netflix/Hystrix#readme) togeth
 There is an implicit method `future` available on any `HystrixCommand`, that will return a [Scala Future](http://www.scala-lang.org/api/current/#scala.concurrent.Future) rather then what Java calls a Future.
 This is implemented by [`HystrixCommandWithScalaFuture`](app/util/Futures.scala#L13)
 
-You can see it in Action in the [app/controllers/Application.scala#L16](Application controller).
+You can see it in Action in the [Application controller](app/controllers/Application.scala#L16).
 
 
 ## Providing a metrics stream, consumable by the hystrix-dashboard
