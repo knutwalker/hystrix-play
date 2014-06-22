@@ -6,6 +6,7 @@
 GET        /                    controllers.Application.index
 
 GET        /bernd               controllers.Application.test
+GET        /async               controllers.Application.async
 GET        /hystrix.stream      controllers.HystrixSupport.stream(delay: Option[Int])
 
 # Map static resources from the /public folder to the /assets URL path
