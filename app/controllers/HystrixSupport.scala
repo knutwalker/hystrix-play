@@ -2,7 +2,7 @@ package controllers
 
 import play.api.mvc._
 import java.util.concurrent.atomic.{AtomicReference, AtomicInteger}
-import com.netflix.config.{DynamicPropertyFactory, DynamicIntProperty}
+import com.netflix.config.scala.DynamicIntProperty
 import com.netflix.hystrix.contrib.metrics.eventstream.HystrixMetricsPoller
 import play.api.Logger
 import play.api.libs.concurrent.Akka
@@ -21,7 +21,7 @@ object HystrixSupport extends Controller {
   def stream(delayOpt: Option[Int]) = Action {
 
     val numberConnections = concurrentConnections.incrementAndGet()
-    val maxConnections = maxConcurrentConnections.get
+    val maxConnections = maxConcurrentConnections.get()
 
     Some(numberConnections).
       filter(_ <= maxConnections).
@@ -43,7 +43,7 @@ object HystrixSupport extends Controller {
 
   private[this] final val concurrentConnections: AtomicInteger = new AtomicInteger(0)
   private[this] final val maxConcurrentConnections: DynamicIntProperty =
-    DynamicPropertyFactory.getInstance.getIntProperty("hystrix.stream.maxConcurrentConnections", 5)
+    new DynamicIntProperty("hystrix.stream.maxConcurrentConnections", 5)
 
   private[this] def streamRequest(delay: Int): Enumerator[Array[Byte]] = {
     val listener = new MetricJsonListener(1000)
@@ -103,7 +103,7 @@ object HystrixSupport extends Controller {
       oldValue
     }
 
-    def handleJsonMetric(json: String) {
+    def handleJsonMetric(json: String): Unit = {
       val oldMetrics = metrics.get()
       if (oldMetrics.size >= capacity) throw new IllegalStateException("Queue full")
 
