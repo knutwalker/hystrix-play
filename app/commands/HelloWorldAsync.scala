@@ -1,44 +1,49 @@
 package commands
 
-import scala.concurrent.duration._
+import scala.concurrent.{Future, ExecutionContext}
 
-import akka.actor.{Actor, Props}
+import akka.actor.{Actor, Props, ActorSystem}
+import akka.pattern.ask
+import akka.util.Timeout
+import java.util.concurrent.TimeUnit
 
-import com.netflix.hystrix.{HystrixCommandGroupKey, HystrixObservableCommand}
+import com.netflix.hystrix.HystrixCommandGroupKey
 import rx.Observable
-import rx.lang.scala.Observer
-import rx.lang.scala.subjects.ReplaySubject
+
+import util.Futures.HystrixFutureCommand
 
 
-class HelloWorldAsync(name: String) extends HystrixObservableCommand[String](HelloWorldAsync.key) {
-  import play.api.Play.current
-  import play.api.libs.concurrent.Akka
+class HelloWorldAsync(name: String)(implicit system: ActorSystem, ec: ExecutionContext)
+  extends HystrixFutureCommand[String](HelloWorldAsync.key) {
 
-  def run(): Observable[String] = {
-    val channel = ReplaySubject[String]()
-    Akka.system.actorOf(HelloWorldAsync.actor(channel, name))
-    channel.asJavaSubject
+  implicit val timeout = Timeout(5000, TimeUnit.MILLISECONDS)
+
+  override def run(): Future[String] = {
+    val actor = system.actorOf(HelloWorldAsync.actor(name))
+    val f = actor ? HelloWorldAsync.ReturnMessage
+    f.asInstanceOf[Future[String]]
   }
+
+  override protected def resumeWithFallback(): Observable[String] = {
+    Observable.from(Array("Fallback (Async)"))
+  }
+
 }
+
 object HelloWorldAsync {
   private final val key = HystrixCommandGroupKey.Factory.asKey("HelloWorldAsync")
 
-  def actor(subj: Observer[String], name: String) = Props(new HelloWorldActor(subj, name))
+  def actor(name: String) = Props(new HelloWorldActor(name))
 
-  private class HelloWorldActor(subj: Observer[String], name: String) extends Actor {
-    import context.dispatcher
-
-    override def preStart(): Unit = {
-      context.system.scheduler.scheduleOnce(500.millis, self, ReturnMessage)
-      super.preStart()
-    }
+  private class HelloWorldActor(name: String) extends Actor {
 
     def receive = {
-      case ReturnMessage =>
-        subj.onNext(s"Hello, $name! (Async)")
-        subj.onCompleted()
-        context stop self
+      case ReturnMessage => {
+        Thread.sleep((math.random * 1500).toLong)
+        sender ! s"Hello, $name! (Async)"
+      }
     }
+
   }
 
   case object ReturnMessage

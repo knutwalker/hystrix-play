@@ -1,10 +1,12 @@
 package controllers
 
 import play.api.mvc._
+import akka.actor.ActorSystem
 import commands.{HelloWorld, HelloWorldAsync}
 import util.Futures
+import javax.inject.Inject
 
-object Application extends Controller {
+class Application @Inject()(implicit system: ActorSystem) extends Controller {
   import play.api.libs.concurrent.Execution.Implicits.defaultContext
 
 import util.Futures._
