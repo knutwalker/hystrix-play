@@ -7,28 +7,31 @@ import com.netflix.hystrix.contrib.metrics.eventstream.HystrixMetricsPoller
 import play.api.Logger
 import play.api.libs.concurrent.Akka
 import play.api.libs.iteratee.Enumerator
+import play.api.libs.streams.Streams
 import java.util.concurrent.TimeUnit
 import scala.annotation.tailrec
 import scala.concurrent.duration.FiniteDuration
 import akka.actor.ActorSystem
+import akka.stream.scaladsl.Source
 import java.io.OutputStream
 import scala.util.Try
+import javax.inject.Inject
 
-object HystrixSupport extends Controller {
+class HystrixSupport @Inject()(system: ActorSystem) extends Controller {
   import play.api.Play.current
   import play.api.libs.concurrent.Execution.Implicits.defaultContext
 
   def stream(delayOpt: Option[Int]) = Action {
 
     val numberConnections = concurrentConnections.incrementAndGet()
-    val maxConnections = maxConcurrentConnections.get()
+    val maxConnections = maxConcurrentConnections.get
 
     Some(numberConnections).
       filter(_ <= maxConnections).
       map(_ => delayOpt.getOrElse(500)).
       fold(unavailable(maxConnections)) { delay =>
-
-        Ok.chunked(streamRequest(delay)).withHeaders(
+        val source = Source.fromPublisher(Streams.enumeratorToPublisher(streamRequest(delay)))
+        Ok.chunked(source).withHeaders(
           "Content-Type" -> "text/event-stream;charset=UTF-8",
           "Cache-Control" -> "no-cache, no-store, max-age=0, must-revalidate",
           "Pragma" -> "no-cache"
@@ -52,7 +55,6 @@ object HystrixSupport extends Controller {
     Logger.info("Starting poller")
 
     val delayDuration = FiniteDuration(delay, TimeUnit.MILLISECONDS)
-    val system = Akka.system
 
     val streamer = (out: OutputStream) => produceStream(poller, listener, delayDuration, system, out)
     val closer = () => {
