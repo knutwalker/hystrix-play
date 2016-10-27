@@ -1,26 +1,24 @@
 package controllers
 
-import play.api.mvc._
-import java.util.concurrent.atomic.{AtomicReference, AtomicInteger}
-import com.netflix.config.scala.DynamicIntProperty
-import com.netflix.hystrix.contrib.metrics.eventstream.HystrixMetricsPoller
-import play.api.Logger
-import play.api.libs.concurrent.Akka
-import play.api.libs.iteratee.Enumerator
-import play.api.libs.streams.Streams
-import java.util.concurrent.TimeUnit
-import scala.annotation.tailrec
-import scala.concurrent.duration.FiniteDuration
-import akka.actor.ActorSystem
-import akka.stream.scaladsl.Source
-import java.io.OutputStream
-import scala.util.Try
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 
-class HystrixSupport @Inject()(system: ActorSystem) extends Controller {
-  import play.api.Play.current
-  import play.api.libs.concurrent.Execution.Implicits.defaultContext
+import akka.actor.ActorSystem
+import akka.stream.scaladsl.Source
+import com.netflix.config.scala.DynamicIntProperty
+import com.netflix.hystrix.metric.consumer.HystrixDashboardStream
+import com.netflix.hystrix.metric.consumer.HystrixDashboardStream.DashboardData
+import com.netflix.hystrix.serial.SerialHystrixDashboardData
+import play.api.Logger
+import play.api.libs.EventSource
+import play.api.mvc._
+import rx.functions.Func1
+import rx.{Observable, RxReactiveStreams}
 
+import scala.collection.JavaConverters._
+import scala.concurrent.duration._
+class HystrixSupport @Inject()(system: ActorSystem) extends Controller {
+  import play.api.libs.concurrent.Execution.Implicits._
   def stream(delayOpt: Option[Int]) = Action {
 
     val numberConnections = concurrentConnections.incrementAndGet()
@@ -30,13 +28,25 @@ class HystrixSupport @Inject()(system: ActorSystem) extends Controller {
       filter(_ <= maxConnections).
       map(_ => delayOpt.getOrElse(500)).
       fold(unavailable(maxConnections)) { delay =>
-        val source = Source.fromPublisher(Streams.enumeratorToPublisher(streamRequest(delay)))
-        Ok.chunked(source).withHeaders(
+        val y = HystrixDashboardStream.getInstance().observe().concatMap(new Func1[DashboardData, Observable[String]]() {
+           def call(dashboardData:DashboardData) = {
+             Logger.info("Getting data")
+             Observable.from(SerialHystrixDashboardData.toMultipleJsonStrings(dashboardData).asScala.map(x => x + "\n\n").asJava);
+          }
+        })
+
+        val publisher = RxReactiveStreams.toPublisher(y);
+        val source = Source.fromPublisher(publisher).via(EventSource.flow).watchTermination() { (m, f) =>
+          f.onComplete{_ => Logger.info("Releasing connection"); concurrentConnections.decrementAndGet()}
+          m
+        }.delay(delay.milli)
+
+        Ok.chunked(source ).withHeaders(
           "Content-Type" -> "text/event-stream;charset=UTF-8",
           "Cache-Control" -> "no-cache, no-store, max-age=0, must-revalidate",
           "Pragma" -> "no-cache"
         )
-    }
+      }
   }
 
   private[this] def unavailable(max: Int) = {
@@ -48,71 +58,5 @@ class HystrixSupport @Inject()(system: ActorSystem) extends Controller {
   private[this] final val maxConcurrentConnections: DynamicIntProperty =
     new DynamicIntProperty("hystrix.stream.maxConcurrentConnections", 5)
 
-  private[this] def streamRequest(delay: Int): Enumerator[Array[Byte]] = {
-    val listener = new MetricJsonListener(1000)
-    val poller = new HystrixMetricsPoller(listener, delay)
-    poller.start()
-    Logger.info("Starting poller")
 
-    val delayDuration = FiniteDuration(delay, TimeUnit.MILLISECONDS)
-
-    val streamer = (out: OutputStream) => produceStream(poller, listener, delayDuration, system, out)
-    val closer = () => {
-      Logger.info("Closing poller")
-      poller.shutdown()
-      concurrentConnections.decrementAndGet()
-    }
-
-    val enum = Enumerator.outputStream(streamer)
-    enum.onDoneEnumerating(closer())
-  }
-
-  private[this] def produceStream(poller: HystrixMetricsPoller, listener: MetricJsonListener, delay: FiniteDuration, system: ActorSystem, out: OutputStream): Unit = {
-    val strings = produce(poller, listener)
-    if (strings.isEmpty) {
-      out.flush()
-      out.close()
-    }
-    else {
-      strings.foreach(s => out.write(s"$s\n\n".getBytes("UTF-8")))
-      out.flush()
-      Try(system.scheduler.scheduleOnce(delay)(produceStream(poller, listener, delay, system, out)))
-    }
-  }
-
-  private[this] def produce(poller: HystrixMetricsPoller, listener: MetricJsonListener): Vector[String] = {
-    if (!poller.isRunning) Vector()
-    else {
-      val jsonMessages = listener.getJsonMetrics
-
-      if (jsonMessages.isEmpty) Vector("ping: ")
-      else jsonMessages.map(j => s"data: $j")
-    }
-  }
-
-  private class MetricJsonListener(capacity: Int) extends HystrixMetricsPoller.MetricsAsJsonPollerListener {
-
-    private[this] final val metrics = new AtomicReference[Vector[String]](Vector())
-
-    @tailrec
-    private[this] final def set(oldValue: Vector[String], newValue: Vector[String]): Boolean = {
-      metrics.compareAndSet(oldValue, newValue) || set(oldValue, newValue)
-    }
-
-    private[this] final def getAndSet(newValue: Vector[String]): Vector[String] = {
-      val oldValue = metrics.get
-      set(oldValue, newValue)
-      oldValue
-    }
-
-    def handleJsonMetric(json: String): Unit = {
-      val oldMetrics = metrics.get()
-      if (oldMetrics.size >= capacity) throw new IllegalStateException("Queue full")
-
-      val newMetrics = oldMetrics :+ json
-      set(oldMetrics, newMetrics)
-    }
-
-    def getJsonMetrics: Vector[String] = getAndSet(Vector())
-  }
 }
