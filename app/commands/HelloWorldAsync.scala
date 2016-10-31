@@ -25,7 +25,7 @@ class HelloWorldAsync(name: String)(implicit system: ActorSystem, ec: ExecutionC
   }
 
   override protected def resumeWithFallback(): Observable[String] = {
-    Observable.from(Array("Fallback (Async)"))
+    Observable.just("Fallback (Async)")
   }
 
 }
